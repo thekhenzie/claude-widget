@@ -49,7 +49,7 @@ public sealed class CredentialStore
 
             if (IsExpiredOrExpiringSoon(token))
             {
-                token = await RefreshAsync(token, ct);
+                token = await RefreshOrFallBackToSourceAsync(token, ct);
             }
 
             _current = token;
@@ -58,6 +58,32 @@ public sealed class CredentialStore
         finally
         {
             _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Claude Code can refresh and rotate its own OAuth token independently of
+    /// this widget, which leaves our cached refresh token stale and permanently
+    /// rejected. If refreshing fails, re-read Claude Code's source credentials
+    /// file for whatever it currently has before giving up.
+    /// </summary>
+    private async Task<CachedToken> RefreshOrFallBackToSourceAsync(CachedToken token, CancellationToken ct)
+    {
+        try
+        {
+            return await RefreshAsync(token, ct);
+        }
+        catch (CredentialException)
+        {
+            if (LoadFromSource() is { } fresh
+                && fresh.AccessToken != token.AccessToken
+                && !IsExpiredOrExpiringSoon(fresh))
+            {
+                SaveCache(fresh);
+                return fresh;
+            }
+
+            throw;
         }
     }
 

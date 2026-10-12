@@ -1,0 +1,280 @@
+diff --git a/ClaudeUsageWidget/App.xaml.cs b/ClaudeUsageWidget/App.xaml.cs
+index 7c0899e..bbcce72 100644
+--- a/ClaudeUsageWidget/App.xaml.cs
++++ b/ClaudeUsageWidget/App.xaml.cs
+@@ -2,6 +2,7 @@ using System.Net.Http;
+ using System.Threading;
+ using System.Windows;
+ using ClaudeUsageWidget.Auth;
++using ClaudeUsageWidget.Settings;
+ using ClaudeUsageWidget.UI;
+ using ClaudeUsageWidget.Usage;
+ 
+@@ -15,6 +16,7 @@ public partial class App : Application
+     private Mutex? _singleInstanceMutex;
+     private HttpClient? _http;
+     private UsagePoller? _poller;
++    private ClaudeModelSetting? _modelSetting;
+     private DockedBarWindow? _window;
+ 
+     protected override void OnStartup(StartupEventArgs e)
+@@ -33,7 +35,9 @@ public partial class App : Application
+         var usageClient = new UsageClient(_http, credentials);
+         _poller = new UsagePoller(usageClient, PollInterval);
+ 
+-        _window = new DockedBarWindow(_poller);
++        _modelSetting = new ClaudeModelSetting();
++
++        _window = new DockedBarWindow(_poller, _modelSetting);
+         _window.Show();
+ 
+         _poller.Start();
+@@ -42,6 +46,7 @@ public partial class App : Application
+     protected override void OnExit(ExitEventArgs e)
+     {
+         _poller?.Dispose();
++        _modelSetting?.Dispose();
+         _http?.Dispose();
+ 
+         if (_singleInstanceMutex is not null)
+diff --git a/ClaudeUsageWidget/UI/DockedBarWindow.xaml b/ClaudeUsageWidget/UI/DockedBarWindow.xaml
+index e14beed..bb102af 100644
+--- a/ClaudeUsageWidget/UI/DockedBarWindow.xaml
++++ b/ClaudeUsageWidget/UI/DockedBarWindow.xaml
+@@ -10,7 +10,7 @@
+         Topmost="True"
+         WindowStartupLocation="Manual"
+         SizeToContent="Manual"
+-        Width="244" Height="42"
++        Width="294" Height="42"
+         Left="-1000" Top="-1000">
+     <Border x:Name="RootBorder" CornerRadius="6" Background="#CC1E1E1E" Padding="6,4">
+         <Border.ContextMenu>
+@@ -21,61 +21,81 @@
+                 <MenuItem Header="Exit" Click="OnExitClick" />
+             </ContextMenu>
+         </Border.ContextMenu>
+-        <StackPanel>
+-            <!-- Row 1: percentage pills + menu -->
+-            <Grid Margin="0,0,0,3">
+-                <Grid.ColumnDefinitions>
+-                    <ColumnDefinition Width="*" />
+-                    <ColumnDefinition Width="4" />
+-                    <ColumnDefinition Width="*" />
+-                    <ColumnDefinition Width="4" />
+-                    <ColumnDefinition Width="20" />
+-                </Grid.ColumnDefinitions>
++        <Grid>
++            <Grid.ColumnDefinitions>
++                <ColumnDefinition Width="44" />
++                <ColumnDefinition Width="6" />
++                <ColumnDefinition Width="*" />
++            </Grid.ColumnDefinitions>
+ 
+-                <Border x:Name="SessionPill" Grid.Column="0" Width="92" Height="16" HorizontalAlignment="Left" CornerRadius="8" Background="#3A3A3A">
+-                    <Grid>
+-                        <Border x:Name="SessionFill" HorizontalAlignment="Left" Width="0" CornerRadius="8" Background="#E2703A" />
+-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+-                            <Ellipse Width="6" Height="6" Fill="White" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,4,0" />
+-                            <TextBlock x:Name="SessionPctText" Text="--%" Foreground="White" FontSize="10" FontWeight="Bold" VerticalAlignment="Center" />
+-                            <TextBlock x:Name="SessionTimeText" Text="--:--" Foreground="#F0FFFFFF" FontSize="10" VerticalAlignment="Center" Margin="4,0,0,0" />
+-                        </StackPanel>
+-                    </Grid>
++            <!-- Claude Code default model toggle (writes "model" in ~/.claude/settings.json) -->
++            <StackPanel Grid.Column="0" VerticalAlignment="Center">
++                <Border x:Name="OpusButton" Height="15" CornerRadius="4" Background="#33FFFFFF" Cursor="Hand" Margin="0,0,0,2"
++                        MouseLeftButtonUp="OnOpusButtonClick" ToolTip="Default model: Opus 5.5">
++                    <TextBlock x:Name="OpusButtonText" Text="Opus" Foreground="#DDDDDD" FontSize="9" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                 </Border>
+-
+-                <Border x:Name="WeeklyPill" Grid.Column="2" Width="92" Height="16" HorizontalAlignment="Left" CornerRadius="8" Background="#3A3A3A">
+-                    <Grid>
+-                        <Border x:Name="WeeklyFill" HorizontalAlignment="Left" Width="0" CornerRadius="8" Background="#3E8EF7" />
+-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+-                            <Ellipse Width="6" Height="6" Fill="White" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,4,0" />
+-                            <TextBlock x:Name="WeeklyPctText" Text="--%" Foreground="White" FontSize="10" FontWeight="Bold" VerticalAlignment="Center" />
+-                            <TextBlock x:Name="WeeklyTimeText" Text="--:--" Foreground="#F0FFFFFF" FontSize="10" VerticalAlignment="Center" Margin="4,0,0,0" />
+-                        </StackPanel>
+-                    </Grid>
++                <Border x:Name="SonnetButton" Height="15" CornerRadius="4" Background="#33FFFFFF" Cursor="Hand"
++                        MouseLeftButtonUp="OnSonnetButtonClick" ToolTip="Default model: Sonnet">
++                    <TextBlock x:Name="SonnetButtonText" Text="Sonnet" Foreground="#DDDDDD" FontSize="9" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                 </Border>
++            </StackPanel>
+ 
+-                <Border Grid.Column="4" Background="#33FFFFFF" CornerRadius="4" Cursor="Hand" MouseLeftButtonUp="OnMenuButtonClick">
+-                    <TextBlock Text="&#9776;" Foreground="#DDDDDD" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" />
+-                </Border>
+-            </Grid>
++            <StackPanel Grid.Column="2">
++                <!-- Row 1: percentage pills + menu -->
++                <Grid Margin="0,0,0,3">
++                    <Grid.ColumnDefinitions>
++                        <ColumnDefinition Width="*" />
++                        <ColumnDefinition Width="4" />
++                        <ColumnDefinition Width="*" />
++                        <ColumnDefinition Width="4" />
++                        <ColumnDefinition Width="20" />
++                    </Grid.ColumnDefinitions>
++
++                    <Border x:Name="SessionPill" Grid.Column="0" Width="92" Height="16" HorizontalAlignment="Left" CornerRadius="8" Background="#3A3A3A">
++                        <Grid>
++                            <Border x:Name="SessionFill" HorizontalAlignment="Left" Width="0" CornerRadius="8" Background="#E2703A" />
++                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
++                                <Ellipse Width="6" Height="6" Fill="White" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,4,0" />
++                                <TextBlock x:Name="SessionPctText" Text="--%" Foreground="White" FontSize="10" FontWeight="Bold" VerticalAlignment="Center" />
++                                <TextBlock x:Name="SessionTimeText" Text="--:--" Foreground="#F0FFFFFF" FontSize="10" VerticalAlignment="Center" Margin="4,0,0,0" />
++                            </StackPanel>
++                        </Grid>
++                    </Border>
++
++                    <Border x:Name="WeeklyPill" Grid.Column="2" Width="92" Height="16" HorizontalAlignment="Left" CornerRadius="8" Background="#3A3A3A">
++                        <Grid>
++                            <Border x:Name="WeeklyFill" HorizontalAlignment="Left" Width="0" CornerRadius="8" Background="#3E8EF7" />
++                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
++                                <Ellipse Width="6" Height="6" Fill="White" Opacity="0.7" VerticalAlignment="Center" Margin="0,0,4,0" />
++                                <TextBlock x:Name="WeeklyPctText" Text="--%" Foreground="White" FontSize="10" FontWeight="Bold" VerticalAlignment="Center" />
++                                <TextBlock x:Name="WeeklyTimeText" Text="--:--" Foreground="#F0FFFFFF" FontSize="10" VerticalAlignment="Center" Margin="4,0,0,0" />
++                            </StackPanel>
++                        </Grid>
++                    </Border>
++
++                    <Border Grid.Column="4" Background="#33FFFFFF" CornerRadius="4" Cursor="Hand" MouseLeftButtonUp="OnMenuButtonClick">
++                        <TextBlock Text="&#9776;" Foreground="#DDDDDD" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" />
++                    </Border>
++                </Grid>
+ 
+-            <!-- Row 2: reset countdowns + close + clock -->
+-            <Grid>
+-                <Grid.ColumnDefinitions>
+-                    <ColumnDefinition Width="*" />
+-                    <ColumnDefinition Width="*" />
+-                    <ColumnDefinition Width="Auto" />
+-                </Grid.ColumnDefinitions>
++                <!-- Row 2: reset countdowns + close + clock -->
++                <Grid>
++                    <Grid.ColumnDefinitions>
++                        <ColumnDefinition Width="*" />
++                        <ColumnDefinition Width="*" />
++                        <ColumnDefinition Width="Auto" />
++                    </Grid.ColumnDefinitions>
+ 
+-                <TextBlock x:Name="SessionResetText" Grid.Column="0" Text="reset --" Foreground="#AAAAAA" FontSize="11" />
+-                <TextBlock x:Name="WeeklyResetText" Grid.Column="1" Text="reset --" Foreground="#AAAAAA" FontSize="11" />
++                    <TextBlock x:Name="SessionResetText" Grid.Column="0" Text="reset --" Foreground="#AAAAAA" FontSize="11" />
++                    <TextBlock x:Name="WeeklyResetText" Grid.Column="1" Text="reset --" Foreground="#AAAAAA" FontSize="11" />
+ 
+-                <StackPanel Grid.Column="2" Orientation="Horizontal">
+-                    <TextBlock x:Name="CloseButton" Text="&#10005;" Foreground="#AAAAAA" FontSize="9"
+-                               Cursor="Hand" MouseLeftButtonUp="OnExitClick" Margin="0,0,6,0" VerticalAlignment="Center" />
+-                    <TextBlock x:Name="ClockText" Text="--:--" Foreground="#AAAAAA" FontSize="11" VerticalAlignment="Center" />
+-                </StackPanel>
+-            </Grid>
+-        </StackPanel>
++                    <StackPanel Grid.Column="2" Orientation="Horizontal">
++                        <TextBlock x:Name="CloseButton" Text="&#10005;" Foreground="#AAAAAA" FontSize="9"
++                                   Cursor="Hand" MouseLeftButtonUp="OnExitClick" Margin="0,0,6,0" VerticalAlignment="Center" />
++                        <TextBlock x:Name="ClockText" Text="--:--" Foreground="#AAAAAA" FontSize="11" VerticalAlignment="Center" />
++                    </StackPanel>
++                </Grid>
++            </StackPanel>
++        </Grid>
+     </Border>
+ </Window>
+diff --git a/ClaudeUsageWidget/UI/DockedBarWindow.xaml.cs b/ClaudeUsageWidget/UI/DockedBarWindow.xaml.cs
+index 08a329d..258fb78 100644
+--- a/ClaudeUsageWidget/UI/DockedBarWindow.xaml.cs
++++ b/ClaudeUsageWidget/UI/DockedBarWindow.xaml.cs
+@@ -1,32 +1,44 @@
+ using System.Diagnostics;
+ using System.Windows;
+ using System.Windows.Input;
++using System.Windows.Media;
+ using System.Windows.Interop;
+ using System.Windows.Threading;
+ using ClaudeUsageWidget.Native;
++using ClaudeUsageWidget.Settings;
+ using ClaudeUsageWidget.Usage;
+ 
+ namespace ClaudeUsageWidget.UI;
+ 
+ public partial class DockedBarWindow : Window
+ {
+-    private const int BarWidth = 244;
++    private const int BarWidth = 294;
+     private const int BarHeight = 42;
+     private const double TrackWidth = 92;
+ 
++    private static readonly Brush ModelActiveBackground = Freeze(new SolidColorBrush(Color.FromRgb(0xE2, 0x70, 0x3A)));
++    private static readonly Brush ModelInactiveBackground = Freeze(new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)));
++    private static readonly Brush ModelActiveForeground = Brushes.White;
++    private static readonly Brush ModelInactiveForeground = Freeze(new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)));
++
+     private readonly UsagePoller _poller;
++    private readonly ClaudeModelSetting _modelSetting;
+     private DispatcherTimer? _repositionTimer;
+     private DispatcherTimer? _clockTimer;
+     private UsageSnapshot? _lastSnapshot;
+     private (int X, int Y)? _lastAppliedPosition;
+ 
+-    public DockedBarWindow(UsagePoller poller)
++    public DockedBarWindow(UsagePoller poller, ClaudeModelSetting modelSetting)
+     {
+         InitializeComponent();
+ 
+         _poller = poller;
+         _poller.SnapshotUpdated += OnSnapshotUpdated;
+         _poller.ErrorOccurred += OnPollerError;
++
++        _modelSetting = modelSetting;
++        _modelSetting.Changed += () => Dispatcher.BeginInvoke(RefreshModelButtons);
++        RefreshModelButtons();
+     }
+ 
+     protected override void OnSourceInitialized(EventArgs e)
+@@ -183,6 +195,45 @@ public partial class DockedBarWindow : Window
+                $"Updated {s.FetchedAt.ToLocalTime():HH:mm}";
+     }
+ 
++    private void RefreshModelButtons()
++    {
++        var current = _modelSetting.Read();
++        ApplyModelButtonStyle(OpusButton, OpusButtonText, current == ClaudeModelChoice.Opus);
++        ApplyModelButtonStyle(SonnetButton, SonnetButtonText, current == ClaudeModelChoice.Sonnet);
++    }
++
++    private static void ApplyModelButtonStyle(System.Windows.Controls.Border button, System.Windows.Controls.TextBlock text, bool active)
++    {
++        button.Background = active ? ModelActiveBackground : ModelInactiveBackground;
++        text.Foreground = active ? ModelActiveForeground : ModelInactiveForeground;
++        text.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
++    }
++
++    private void OnOpusButtonClick(object sender, MouseButtonEventArgs e) => SwitchModel(ClaudeModelChoice.Opus);
++
++    private void OnSonnetButtonClick(object sender, MouseButtonEventArgs e) => SwitchModel(ClaudeModelChoice.Sonnet);
++
++    private void SwitchModel(ClaudeModelChoice choice)
++    {
++        try
++        {
++            _modelSetting.Write(choice);
++        }
++        catch (Exception ex)
++        {
++            MessageBox.Show($"Couldn't update Claude Code settings.json:\n{ex.Message}", "Claude Usage",
++                MessageBoxButton.OK, MessageBoxImage.Warning);
++        }
++
++        RefreshModelButtons();
++    }
++
++    private static Brush Freeze(Brush brush)
++    {
++        brush.Freeze();
++        return brush;
++    }
++
+     private void OnRefreshClick(object sender, RoutedEventArgs e) => _poller.TriggerNow();
+ 
+     private void OnMenuButtonClick(object sender, MouseButtonEventArgs e)

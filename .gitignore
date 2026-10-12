@@ -2,3 +2,10 @@ bin/
 obj/
 *.user
 .vs/
+
+# Credentials: the widget reads these from ~/.claude and %LOCALAPPDATA% at runtime.
+# Never commit a copy that lands in the repo.
+.credentials.json
+token-cache.json
+*.env
+.env*

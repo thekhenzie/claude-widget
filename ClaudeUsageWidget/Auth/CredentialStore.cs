@@ -63,9 +63,13 @@ public sealed class CredentialStore
 
     /// <summary>
     /// Claude Code can refresh and rotate its own OAuth token independently of
-    /// this widget, which leaves our cached refresh token stale and permanently
-    /// rejected. If refreshing fails, re-read Claude Code's source credentials
-    /// file for whatever it currently has before giving up.
+    /// this widget, and refresh tokens now have a hard expiry
+    /// (refreshTokenExpiresAt), so our cached refresh token eventually goes stale
+    /// and is permanently rejected with 400 invalid_grant. If refreshing fails,
+    /// re-read Claude Code's source credentials file: use its access token if it
+    /// is still valid, otherwise refresh with its (newer) refresh token. Without
+    /// that second step the widget stayed broken whenever Claude Code had been
+    /// idle long enough for its own access token to lapse (e.g. overnight).
     /// </summary>
     private async Task<CachedToken> RefreshOrFallBackToSourceAsync(CachedToken token, CancellationToken ct)
     {
@@ -75,13 +79,17 @@ public sealed class CredentialStore
         }
         catch (CredentialException)
         {
-            if (LoadFromSource() is { } fresh
-                && fresh.AccessToken != token.AccessToken
-                && !IsExpiredOrExpiringSoon(fresh))
+            if (LoadFromSource() is not { } source)
+                throw;
+
+            if (source.AccessToken != token.AccessToken && !IsExpiredOrExpiringSoon(source))
             {
-                SaveCache(fresh);
-                return fresh;
+                SaveCache(source);
+                return source;
             }
+
+            if (!string.IsNullOrEmpty(source.RefreshToken) && source.RefreshToken != token.RefreshToken)
+                return await RefreshAsync(source, ct);
 
             throw;
         }
@@ -164,8 +172,12 @@ public sealed class CredentialStore
         {
             if (!response.IsSuccessStatusCode)
             {
+                // The body carries the actual reason (e.g. "invalid_grant: Refresh token
+                // expired"), which a bare "400 Bad Request" hides.
+                var detail = await ReadErrorDetailAsync(response, ct);
                 throw new CredentialException(
-                    $"Token refresh was rejected ({(int)response.StatusCode} {response.ReasonPhrase}).");
+                    $"Token refresh was rejected ({(int)response.StatusCode} {response.ReasonPhrase}){detail}. " +
+                    "Open Claude Code once to refresh its login.");
             }
 
             var parsed = await response.Content.ReadFromJsonAsync<RefreshTokenResponse>(cancellationToken: ct)
@@ -183,6 +195,24 @@ public sealed class CredentialStore
 
             SaveCache(refreshed);
             return refreshed;
+        }
+    }
+
+    private static async Task<string> ReadErrorDetailAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var error = await response.Content.ReadFromJsonAsync<OAuthErrorResponse>(cancellationToken: ct);
+            if (error is null || string.IsNullOrEmpty(error.Error))
+                return "";
+
+            return string.IsNullOrEmpty(error.ErrorDescription)
+                ? $": {error.Error}"
+                : $": {error.Error}: {error.ErrorDescription}";
+        }
+        catch
+        {
+            return "";
         }
     }
 

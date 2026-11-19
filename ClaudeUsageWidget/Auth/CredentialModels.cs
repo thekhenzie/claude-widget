@@ -39,6 +39,15 @@ internal sealed class RefreshTokenResponse
     public long ExpiresIn { get; set; }
 }
 
+internal sealed class OAuthErrorResponse
+{
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+
+    [JsonPropertyName("error_description")]
+    public string? ErrorDescription { get; set; }
+}
+
 public sealed class CredentialException : Exception
 {
     public CredentialException(string message) : base(message)
